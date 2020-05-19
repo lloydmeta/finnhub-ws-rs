@@ -1,0 +1,29 @@
+on:
+  push:
+    branches:
+      - master
+
+name: Continuous integration
+
+jobs:
+
+  deploy-wasm:
+    name: Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: jetli/wasm-pack-action@v0.3.0
+        with:
+          version: 'v0.9.1'
+      - run: wasm-pack build --target web --out-name wasm --out-dir ./static
+      - run: rm ./static/.gitignore
+      - name: Deploy
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./static
