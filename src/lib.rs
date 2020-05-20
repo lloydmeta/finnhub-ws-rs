@@ -14,6 +14,7 @@ use yew::services::{ConsoleService, DialogService, WebSocketService};
 use chrono::serde::ts_milliseconds;
 use chrono::{DateTime, Utc};
 
+#[derive(Deserialize, Serialize)]
 struct ApiKey(String);
 
 #[derive(Deserialize, Serialize, Hash, PartialEq, Eq, Clone, Debug)]
@@ -102,6 +103,7 @@ impl TickerHistory {
 
 #[derive(Deserialize, Serialize)]
 struct State {
+    api_key: ApiKey,
     tracked: Vec<Symbol>,
     history: TickerHistory,
 }
@@ -149,7 +151,6 @@ struct Model {
     websocket_service: WebSocketService,
     dialog_service: DialogService,
     console_service: ConsoleService,
-    api_key: ApiKey,
     symbol_to_add: Symbol,
     state: State,
     link: ComponentLink<Self>,
@@ -180,9 +181,9 @@ impl Component for Model {
     type Properties = ();
     fn create(_: Self::Properties, link: ComponentLink<Self>) -> Self {
         Model {
-            api_key: ApiKey("".into()),
             symbol_to_add: Symbol("".into()),
             state: State {
+                api_key: ApiKey("".into()),
                 tracked: vec![],
                 history: TickerHistory::new(),
             },
@@ -196,7 +197,7 @@ impl Component for Model {
 
     fn update(&mut self, msg: Self::Message) -> ShouldRender {
         match msg {
-            Msg::ApiKeyUpdate(key) => self.api_key = key,
+            Msg::ApiKeyUpdate(key) => self.state.api_key = key,
             Msg::ApiKeyConnect => {
                 return self.connect_to_api();
             }
@@ -332,7 +333,7 @@ impl Model {
         });
 
         let websocket_task_result = self.websocket_service.connect(
-            format!("wss://ws.finnhub.io?token={}", self.api_key.0).as_str(),
+            format!("wss://ws.finnhub.io?token={}", self.state.api_key.0).as_str(),
             callback,
             notification,
         );
@@ -384,7 +385,7 @@ impl Model {
             placeholder="API Key"
             aria-label="API Key"
             aria-describedby="api-key-connect"
-            value =& self.api_key.0
+            value =& self.state.api_key.0
             oninput = self.link.callback( | e: InputData | Msg::ApiKeyUpdate(ApiKey(e.value)))
             onkeypress = self.link.callback( |e: KeyboardEvent | {
                 if e.key() == "Enter" { Msg::ApiKeyConnect } else { Msg::Nope }
