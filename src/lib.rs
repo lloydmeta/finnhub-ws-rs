@@ -9,10 +9,11 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use yew::format::Json;
 use yew::services::websocket::{WebSocketStatus, WebSocketTask};
-use yew::services::{ConsoleService, DialogService, WebSocketService};
+use yew::services::{ConsoleService, DialogService, StorageService, WebSocketService};
 
 use chrono::serde::ts_milliseconds;
 use chrono::{DateTime, Utc};
+use yew::services::storage::Area;
 
 #[derive(Deserialize, Serialize)]
 struct ApiKey(String);
@@ -151,6 +152,8 @@ struct Model {
     websocket_service: WebSocketService,
     dialog_service: DialogService,
     console_service: ConsoleService,
+    // optional because might not be supported
+    storage_service: Option<StorageService>,
     symbol_to_add: Symbol,
     state: State,
     link: ComponentLink<Self>,
@@ -176,20 +179,40 @@ enum TickerHealth {
     Bad,
 }
 
+const STATE_STORAGE_KEY: &str = "state";
+
 impl Component for Model {
     type Message = Msg;
     type Properties = ();
+
     fn create(_: Self::Properties, link: ComponentLink<Self>) -> Self {
-        Model {
-            symbol_to_add: Symbol("".into()),
-            state: State {
+        let mut console_service = ConsoleService::new();
+        let maybe_storage_service = StorageService::new(Area::Local).ok();
+        if maybe_storage_service.is_none() {
+            console_service.warn("Local storage is disabled, nothing will be saved.");
+        }
+        let state = maybe_storage_service
+            .as_ref()
+            .and_then(|s| {
+                if let Json(Ok(restored)) = s.restore(STATE_STORAGE_KEY) {
+                    Some(restored)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| State {
                 api_key: ApiKey("".into()),
                 tracked: vec![],
                 history: TickerHistory::new(),
-            },
+            });
+
+        Model {
+            symbol_to_add: Symbol("".into()),
+            state,
+            storage_service: maybe_storage_service,
             websocket_service: WebSocketService::new(),
             dialog_service: DialogService::new(),
-            console_service: ConsoleService::new(),
+            console_service,
             link,
             websocket_task: None,
         }
@@ -197,7 +220,10 @@ impl Component for Model {
 
     fn update(&mut self, msg: Self::Message) -> ShouldRender {
         match msg {
-            Msg::ApiKeyUpdate(key) => self.state.api_key = key,
+            Msg::ApiKeyUpdate(key) => {
+                self.state.api_key = key;
+                self.persist_state();
+            }
             Msg::ApiKeyConnect => {
                 return self.connect_to_api();
             }
@@ -219,6 +245,7 @@ impl Component for Model {
                         websocket_task.send(Json(&subscribe));
                     }
                 }
+                self.persist_state();
             }
             Msg::UnTrackSymbolAtIdx(idx) => {
                 let result = self.state.untrack_symbol(idx);
@@ -230,6 +257,7 @@ impl Component for Model {
                         websocket_task.send(Json(&unsubscribe));
                     }
                 }
+                self.persist_state();
             }
             Msg::WsIncoming(data) => {
                 match data {
@@ -255,6 +283,7 @@ impl Component for Model {
                                 for i in tickers_data {
                                     self.state.add_history(i);
                                 }
+                                self.persist_state();
                             }
                             WsMessage::Ping => return false,
                         }
@@ -307,6 +336,18 @@ impl Component for Model {
                     < h1 class = "display-3">{ "finnhub trades" }< / h1 >
                 < /div >
             < /div>
+            <div class = "row" >
+                < div class ="col text-center" >
+                    <p>{ "WASM app written in " }<a href={"https://www.rust-lang.org"}>{ "Rust" }</a>{ " using "}<a href={"https://yew.rs"}>{ "Yew" }</a>< / p >
+                    <p>{ "Connects to the " }<a href={"https://finnhub.io"}>{ "finnhub.io" }</a>{ " Websocket Trades API and persists to LocalStorage"}< / p >
+                    <p class="text-muted">
+                        { "Github" }
+                        <a class={"p-2"} href={ "https://github.com/lloydmeta/finnhub-ws-rs"}>
+                            <img src={ "https://img.shields.io/github/stars/lloydmeta/finnhub-ws-rs?style=social" } alt={"github"}/>
+                        </a>
+                    < / p >
+                < /div >
+            </div>
             < div class ="row" >
                 < div class ="offset-md-4 col-md-4" >
                     { self.view_api_key_input() }
@@ -324,6 +365,12 @@ impl Component for Model {
 }
 
 impl Model {
+    fn persist_state(&mut self) {
+        if let Some(storage_service) = &mut self.storage_service {
+            storage_service.store(STATE_STORAGE_KEY, Json(&self.state));
+        }
+    }
+
     fn connect_to_api(&mut self) -> bool {
         let callback = self.link.callback(|Json(data)| Msg::WsIncoming(data));
 
@@ -382,8 +429,8 @@ impl Model {
           <input
             type="text"
             class="form-control"
-            placeholder="API Key"
-            aria-label="API Key"
+            placeholder="finnhub.io API Key"
+            aria-label="API Key from finnhub.io"
             aria-describedby="api-key-connect"
             value =& self.state.api_key.0
             oninput = self.link.callback( | e: InputData | Msg::ApiKeyUpdate(ApiKey(e.value)))
