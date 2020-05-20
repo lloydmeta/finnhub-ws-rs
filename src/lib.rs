@@ -274,6 +274,7 @@ impl Component for Model {
                                         );
                                         if delete_last {
                                             self.state.remove_last_added();
+                                            self.persist_state();
                                         }
                                     }
                                 }
