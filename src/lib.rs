@@ -9,11 +9,13 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use yew::format::Json;
 use yew::services::websocket::{WebSocketStatus, WebSocketTask};
-use yew::services::{ConsoleService, DialogService, WebSocketService};
+use yew::services::{ConsoleService, DialogService, StorageService, WebSocketService};
 
 use chrono::serde::ts_milliseconds;
 use chrono::{DateTime, Utc};
+use yew::services::storage::Area;
 
+#[derive(Deserialize, Serialize)]
 struct ApiKey(String);
 
 #[derive(Deserialize, Serialize, Hash, PartialEq, Eq, Clone, Debug)]
@@ -102,6 +104,7 @@ impl TickerHistory {
 
 #[derive(Deserialize, Serialize)]
 struct State {
+    api_key: ApiKey,
     tracked: Vec<Symbol>,
     history: TickerHistory,
 }
@@ -149,7 +152,8 @@ struct Model {
     websocket_service: WebSocketService,
     dialog_service: DialogService,
     console_service: ConsoleService,
-    api_key: ApiKey,
+    // optional because might not be supported
+    storage_service: Option<StorageService>,
     symbol_to_add: Symbol,
     state: State,
     link: ComponentLink<Self>,
@@ -175,20 +179,40 @@ enum TickerHealth {
     Bad,
 }
 
+const STATE_STORAGE_KEY: &str = "state";
+
 impl Component for Model {
     type Message = Msg;
     type Properties = ();
+
     fn create(_: Self::Properties, link: ComponentLink<Self>) -> Self {
-        Model {
-            api_key: ApiKey("".into()),
-            symbol_to_add: Symbol("".into()),
-            state: State {
+        let mut console_service = ConsoleService::new();
+        let maybe_storage_service = StorageService::new(Area::Local).ok();
+        if maybe_storage_service.is_none() {
+            console_service.warn("Local storage is disabled, nothing will be saved.");
+        }
+        let state = maybe_storage_service
+            .as_ref()
+            .and_then(|s| {
+                if let Json(Ok(restored)) = s.restore(STATE_STORAGE_KEY) {
+                    Some(restored)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| State {
+                api_key: ApiKey("".into()),
                 tracked: vec![],
                 history: TickerHistory::new(),
-            },
+            });
+
+        Model {
+            symbol_to_add: Symbol("".into()),
+            state,
+            storage_service: maybe_storage_service,
             websocket_service: WebSocketService::new(),
             dialog_service: DialogService::new(),
-            console_service: ConsoleService::new(),
+            console_service,
             link,
             websocket_task: None,
         }
@@ -196,7 +220,10 @@ impl Component for Model {
 
     fn update(&mut self, msg: Self::Message) -> ShouldRender {
         match msg {
-            Msg::ApiKeyUpdate(key) => self.api_key = key,
+            Msg::ApiKeyUpdate(key) => {
+                self.state.api_key = key;
+                self.persist_state();
+            }
             Msg::ApiKeyConnect => {
                 return self.connect_to_api();
             }
@@ -218,6 +245,7 @@ impl Component for Model {
                         websocket_task.send(Json(&subscribe));
                     }
                 }
+                self.persist_state();
             }
             Msg::UnTrackSymbolAtIdx(idx) => {
                 let result = self.state.untrack_symbol(idx);
@@ -229,6 +257,7 @@ impl Component for Model {
                         websocket_task.send(Json(&unsubscribe));
                     }
                 }
+                self.persist_state();
             }
             Msg::WsIncoming(data) => {
                 match data {
@@ -254,6 +283,7 @@ impl Component for Model {
                                 for i in tickers_data {
                                     self.state.add_history(i);
                                 }
+                                self.persist_state();
                             }
                             WsMessage::Ping => return false,
                         }
@@ -306,6 +336,18 @@ impl Component for Model {
                     < h1 class = "display-3">{ "finnhub trades" }< / h1 >
                 < /div >
             < /div>
+            <div class = "row" >
+                < div class ="col text-center" >
+                    <p>{ "WASM app written in " }<a href={"https://www.rust-lang.org"}>{ "Rust" }</a>{ " using "}<a href={"https://yew.rs"}>{ "Yew" }</a>< / p >
+                    <p>{ "Connects to the " }<a href={"https://finnhub.io"}>{ "finnhub.io" }</a>{ " Websocket Trades API and persists to LocalStorage"}< / p >
+                    <p class="text-muted">
+                        { "Github" }
+                        <a class={"p-2"} href={ "https://github.com/lloydmeta/finnhub-ws-rs"}>
+                            <img src={ "https://img.shields.io/github/stars/lloydmeta/finnhub-ws-rs?style=social" } alt={"github"}/>
+                        </a>
+                    < / p >
+                < /div >
+            </div>
             < div class ="row" >
                 < div class ="offset-md-4 col-md-4" >
                     { self.view_api_key_input() }
@@ -323,6 +365,12 @@ impl Component for Model {
 }
 
 impl Model {
+    fn persist_state(&mut self) {
+        if let Some(storage_service) = &mut self.storage_service {
+            storage_service.store(STATE_STORAGE_KEY, Json(&self.state));
+        }
+    }
+
     fn connect_to_api(&mut self) -> bool {
         let callback = self.link.callback(|Json(data)| Msg::WsIncoming(data));
 
@@ -332,7 +380,7 @@ impl Model {
         });
 
         let websocket_task_result = self.websocket_service.connect(
-            format!("wss://ws.finnhub.io?token={}", self.api_key.0).as_str(),
+            format!("wss://ws.finnhub.io?token={}", self.state.api_key.0).as_str(),
             callback,
             notification,
         );
@@ -381,10 +429,10 @@ impl Model {
           <input
             type="text"
             class="form-control"
-            placeholder="API Key"
-            aria-label="API Key"
+            placeholder="finnhub.io API Key"
+            aria-label="API Key from finnhub.io"
             aria-describedby="api-key-connect"
-            value =& self.api_key.0
+            value =& self.state.api_key.0
             oninput = self.link.callback( | e: InputData | Msg::ApiKeyUpdate(ApiKey(e.value)))
             onkeypress = self.link.callback( |e: KeyboardEvent | {
                 if e.key() == "Enter" { Msg::ApiKeyConnect } else { Msg::Nope }
@@ -474,34 +522,42 @@ impl Model {
                 </div>
             }
         } else {
-            let not_connected_warning = if self.websocket_task.is_none() {
-                html! {
-                <p class="card-text border-warning"><small class="text-muted">{ "Not connected to API"}</small></p>
-                }
-            } else {
-                html! {}
-            };
             html! {
                 <div class="text-left">
                     <p class="card-text">{ "No trades details yet" }</p>
-                    { not_connected_warning }
                 </div>
             }
         };
 
-        let card_health_class = match ticker_health {
-            TickerHealth::Good => "border-success",
-            TickerHealth::Bad => "border-danger",
-            TickerHealth::Normal => "border-primary",
+        let not_connected_to_api = self.websocket_task.is_none();
+
+        let card_class = {
+            let card_health_class = if not_connected_to_api {
+                "border-warning"
+            } else {
+                match ticker_health {
+                    TickerHealth::Good => "border-success",
+                    TickerHealth::Bad => "border-danger",
+                    TickerHealth::Normal => "border-primary",
+                }
+            };
+            format!("card m-2 {}", card_health_class)
         };
-        let card_class = format!("card m-2 {}", card_health_class);
+
+        let not_connected_warning = if not_connected_to_api {
+            html! {
+            <small class="text-muted p-2">{ "Not connected to API"}</small>
+            }
+        } else {
+            html! {}
+        };
 
         html! {
         <div class={ card_class }>
           <div class="card-header">
             < div class ="d-flex w-100 justify-content-between" >
                 <div class="flex-fill text-left">
-                    <h5 class="mb-1">{ & symbol.0 }</h5>
+                    <h5 class="mb-1">{ & symbol.0 }{ not_connected_warning }</h5>
                 </div>
                 < div class="flex-fill text-right">
                     <button type="button" class="close" aria-label="Untrack" onclick = self.link.callback( move | _ | Msg::UnTrackSymbolAtIdx(idx)) >
