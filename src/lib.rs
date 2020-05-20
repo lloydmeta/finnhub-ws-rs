@@ -475,34 +475,42 @@ impl Model {
                 </div>
             }
         } else {
-            let not_connected_warning = if self.websocket_task.is_none() {
-                html! {
-                <p class="card-text border-warning"><small class="text-muted">{ "Not connected to API"}</small></p>
-                }
-            } else {
-                html! {}
-            };
             html! {
                 <div class="text-left">
                     <p class="card-text">{ "No trades details yet" }</p>
-                    { not_connected_warning }
                 </div>
             }
         };
 
-        let card_health_class = match ticker_health {
-            TickerHealth::Good => "border-success",
-            TickerHealth::Bad => "border-danger",
-            TickerHealth::Normal => "border-primary",
+        let not_connected_to_api = self.websocket_task.is_none();
+
+        let card_class = {
+            let card_health_class = if not_connected_to_api {
+                "border-warning"
+            } else {
+                match ticker_health {
+                    TickerHealth::Good => "border-success",
+                    TickerHealth::Bad => "border-danger",
+                    TickerHealth::Normal => "border-primary",
+                }
+            };
+            format!("card m-2 {}", card_health_class)
         };
-        let card_class = format!("card m-2 {}", card_health_class);
+
+        let not_connected_warning = if not_connected_to_api {
+            html! {
+            <small class="text-muted p-2">{ "Not connected to API"}</small>
+            }
+        } else {
+            html! {}
+        };
 
         html! {
         <div class={ card_class }>
           <div class="card-header">
             < div class ="d-flex w-100 justify-content-between" >
                 <div class="flex-fill text-left">
-                    <h5 class="mb-1">{ & symbol.0 }</h5>
+                    <h5 class="mb-1">{ & symbol.0 }{ not_connected_warning }</h5>
                 </div>
                 < div class="flex-fill text-right">
                     <button type="button" class="close" aria-label="Untrack" onclick = self.link.callback( move | _ | Msg::UnTrackSymbolAtIdx(idx)) >
