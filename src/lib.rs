@@ -313,9 +313,14 @@ impl Component for Model {
                 return true;
             }
             Msg::WsDead => {
-                self.dialog_service
-                    .alert("The Websocket connection could not be established 😞 Maybe your API key is wrong?");
-                self.websocket_task = None;
+                if self
+                    .dialog_service
+                    .confirm("The Websocket connection failed 😞\n\nThis might be because our API key is wrong, but if you were previously connected, you might want to try reconnecting?")
+                {
+                    return self.connect_to_api();
+                } else {
+                    self.websocket_task = None;
+                }
             }
             Msg::Nope => (),
         }
